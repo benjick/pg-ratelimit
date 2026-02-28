@@ -1,0 +1,100 @@
+---
+title: Getting Started
+description: Install pg-ratelimit and add rate limiting to your app in minutes.
+---
+
+import { Tabs, TabItem, Steps } from "@astrojs/starlight/components";
+
+<Steps>
+
+1. **Install the package**
+
+   <Tabs>
+     <TabItem label="pnpm">```bash pnpm add pg-ratelimit pg ```</TabItem>
+     <TabItem label="npm">```bash npm install pg-ratelimit pg ```</TabItem>
+     <TabItem label="yarn">```bash yarn add pg-ratelimit pg ```</TabItem>
+   </Tabs>
+
+2. **Create a rate limiter**
+
+   ```typescript
+   import { Pool } from "pg";
+   import { Ratelimit } from "pg-ratelimit";
+
+   const pool = new Pool({
+     connectionString: process.env.DATABASE_URL,
+   });
+
+   const ratelimit = new Ratelimit({
+     pool,
+     limiter: Ratelimit.slidingWindow(10, "1m"),
+     prefix: "api",
+   });
+   ```
+
+   Tables are auto-created via `CREATE TABLE IF NOT EXISTS` on first use. No migrations needed.
+
+3. **Check a rate limit**
+
+   ```typescript
+   const result = await ratelimit.limit("user:123");
+
+   if (!result.success) {
+     console.log(`Rate limited. Retry after ${result.reset}`);
+   }
+   ```
+
+</Steps>
+
+## Choosing an algorithm
+
+pg-ratelimit ships three algorithms as static methods on the `Ratelimit` class.
+
+<Tabs>
+  <TabItem label="Fixed Window">
+    ```typescript
+    // 10 requests per minute
+    Ratelimit.fixedWindow(10, '1m')
+    ```
+
+    Simplest and fastest. Counts requests in a fixed time bucket. Has a known boundary problem - bursts at the window edge can effectively double the rate.
+
+  </TabItem>
+  <TabItem label="Sliding Window">
+    ```typescript
+    // 50 requests per 30 seconds
+    Ratelimit.slidingWindow(50, '30s')
+    ```
+
+    Weights the previous window against the current one based on time position. Fixes the boundary problem. Slightly more overhead than fixed window.
+
+  </TabItem>
+  <TabItem label="Token Bucket">
+    ```typescript
+    // Refill 5 tokens every 10s, max 20
+    Ratelimit.tokenBucket(5, '10s', 20)
+    ```
+
+    Allows short bursts while enforcing an average rate. Great for quota-style rate limiting where you want to allow occasional spikes.
+
+  </TabItem>
+</Tabs>
+
+## Duration format
+
+Windows and intervals accept a `Duration` string or raw milliseconds:
+
+```typescript
+"30s"; // 30 seconds
+"30 s"; // also 30 seconds (space is optional)
+"5m"; // 5 minutes
+"1h"; // 1 hour
+"1d"; // 1 day
+60000; // raw milliseconds
+```
+
+## What's next?
+
+- Learn about each algorithm in detail: [Fixed Window](/algorithms/fixed-window/), [Sliding Window](/algorithms/sliding-window/), [Token Bucket](/algorithms/token-bucket/)
+- See the full [API Reference](/api-reference/)
+- Understand the [Database Design](/database/)

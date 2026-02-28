@@ -1,0 +1,51 @@
+---
+title: pg-ratelimit
+description: PostgreSQL-backed rate limiting for Node.js. No Redis required.
+template: splash
+head:
+  - tag: title
+    content: pg-ratelimit | PostgreSQL-backed rate limiting for Node.js
+hero:
+  tagline: Rate limiting backed by your existing Postgres. No Redis, no extra infrastructure.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/benjick/pg-ratelimit
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+```typescript
+const { success } = await ratelimit.limit("user:123");
+if (!success) return new Response("Too Many Requests", { status: 429 });
+```
+
+<CardGrid>
+  <Card title="Zero runtime dependencies" icon="seti:config">
+    Just `pg` as a peer dependency. No Redis, no extra services - use the Postgres you already have.
+  </Card>
+  <Card title="Three algorithms" icon="list-format">
+    Fixed window, sliding window, and token bucket. Pick the right tradeoff for your use case.
+  </Card>
+  <Card title="Serverless-safe" icon="rocket">
+    No background processes or singletons. Probabilistic inline cleanup with no long-lived state.
+    Works in Lambda, Vercel, and other serverless platforms.
+  </Card>
+  <Card title="Upstash-compatible API" icon="random">
+    Same `limit()`, `blockUntilReady()`, `getRemaining()`, and `resetUsedTokens()` surface. Migrate
+    with minimal code changes.
+  </Card>
+</CardGrid>
+
+## Why pg-ratelimit?
+
+- **You already have Postgres** - no need to add Redis or another service just for rate limiting
+- **One fewer dependency** - zero runtime deps beyond `pg`, which you're already using
+- **Durable mode** - survive crashes with logged tables for billing/quota use cases
+- **Postgres handles it fine** - for most apps, Postgres can easily handle the rate-limiting write load alongside your application queries
+- **UNLOGGED closes the perf gap** - ephemeral (UNLOGGED) tables skip WAL writes, making throughput competitive with in-memory stores

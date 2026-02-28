@@ -1,0 +1,309 @@
+---
+title: API Reference
+description: Complete reference for the pg-ratelimit API.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+## `new Ratelimit(config)`
+
+Creates a new rate limiter instance.
+
+```typescript
+import { Pool } from "pg";
+import { Ratelimit } from "pg-ratelimit";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.slidingWindow(10, "1m"),
+  prefix: "api",
+  durable: false,
+  debug: false,
+});
+```
+
+**Config:**
+
+| Property             | Type        | Description                                                                                                                                      |
+| -------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pool`               | `pg.Pool`   | A `pg` connection pool                                                                                                                           |
+| `limiter`            | `Algorithm` | Algorithm config from a static helper method                                                                                                     |
+| `prefix`             | `string`    | Required - namespaces keys to prevent collisions                                                                                                 |
+| `durable`            | `boolean`   | Optional. Default: `false` - `true` uses logged table                                                                                            |
+| `synchronousCommit`  | `boolean`   | Only when `durable: true`. Default: `false` - see [RatelimitConfig](#ratelimitconfig)                                                            |
+| `debug`              | `boolean`   | Optional. Default: `false` - logs queries to `console.debug`                                                                                     |
+| `clock`              | `Clock`     | Optional. Custom clock for testing. Defaults to `() => new Date()`                                                                               |
+| `cleanupProbability` | `number`    | Optional. Default: `0.1` - probability (0–1) that a `limit()` call runs expired-row cleanup. See [Cleanup strategy](/database/#cleanup-strategy) |
+
+Auto-creates tables on first use via `CREATE TABLE IF NOT EXISTS`. Disable with `PG_RATELIMIT_DISABLE_AUTO_MIGRATE=true`.
+
+---
+
+## `ratelimit.limit(key, opts?)`
+
+Check and consume rate limit tokens. Also performs inline cleanup of expired rows for its prefix.
+
+```typescript
+const result = await ratelimit.limit("user:123");
+
+if (!result.success) {
+  return new Response("Too Many Requests", {
+    status: 429,
+    headers: { "Retry-After": String(Math.ceil((result.reset - Date.now()) / 1000)) },
+  });
+}
+```
+
+**Parameters:**
+
+| Parameter   | Type     | Default | Description                                      |
+| ----------- | -------- | ------- | ------------------------------------------------ |
+| `key`       | `string` | -       | Identifier for the rate limit subject            |
+| `opts.rate` | `number` | `1`     | Tokens to consume. Negative values refund tokens |
+
+**Returns:** `Promise<LimitResult>`
+
+Since `rate` controls how many tokens each call consumes, you can use it for weighted costs, per-tier differentiation, or refunds.
+
+### Weighted costs
+
+```typescript
+// Expensive operation costs 5 tokens
+await ratelimit.limit("user:123", { rate: 5 });
+```
+
+### Refunding tokens
+
+```typescript
+// Refund after a failed upload
+await ratelimit.limit("user:123", { rate: -1 });
+```
+
+Negative rates intentionally do not clamp to the max limit - tokens can exceed the maximum for admin/refund use cases.
+
+### Per-tier limits
+
+Use `rate` to charge different costs per tier without creating separate instances:
+
+```typescript
+await ratelimit.limit("user:123", {
+  rate: isPremium ? 1 : 5,
+});
+```
+
+### Error handling
+
+All methods (`limit`, `blockUntilReady`, `getRemaining`, `resetUsedTokens`) throw if the database is unreachable or returns an error. The original `pg` error propagates directly - nothing is wrapped or swallowed.
+
+The library does **not** fail open or fail closed by default. You decide:
+
+```typescript
+// Fail open - allow requests when DB is down
+const result = await ratelimit.limit(key).catch(() => ({
+  success: true,
+  limit: 0,
+  remaining: 0,
+  reset: Date.now(),
+}));
+
+// Fail closed - deny requests when DB is down
+const result = await ratelimit.limit(key).catch(() => ({
+  success: false,
+  limit: 0,
+  remaining: 0,
+  reset: Date.now(),
+}));
+```
+
+---
+
+## `ratelimit.blockUntilReady(key, timeout, opts?)`
+
+Polls `limit()` until success or timeout. Uses `reset` from failed attempts to calculate sleep duration.
+
+:::caution
+Each poll attempt calls `limit()` and consumes tokens. Fixed window consumes on every attempt (including denials). Sliding window and token bucket only consume on success, so denied polls are free.
+:::
+
+```typescript
+const result = await ratelimit.blockUntilReady("user:123", "30s");
+
+// Block until 5 tokens are available
+const result2 = await ratelimit.blockUntilReady("user:123", "30s", { rate: 5 });
+```
+
+**Parameters:**
+
+| Parameter   | Type                 | Description                                 |
+| ----------- | -------------------- | ------------------------------------------- |
+| `key`       | `string`             | Identifier for the rate limit subject       |
+| `timeout`   | `Duration \| number` | Maximum time to wait                        |
+| `opts.rate` | `number`             | Tokens to consume per attempt (default `1`) |
+
+**Returns:** `Promise<LimitResult>`
+
+Returns failure immediately (without sleeping) if the time until `reset` exceeds the remaining timeout.
+
+---
+
+## `ratelimit.getRemaining(key)`
+
+Check remaining quota without consuming tokens.
+
+```typescript
+const { remaining, reset } = await ratelimit.getRemaining("user:123");
+```
+
+**Returns:** `Promise<{ remaining: number; reset: number }>`
+
+---
+
+## `ratelimit.resetUsedTokens(key)`
+
+Full reset of a key's quota. Useful for admin actions.
+
+```typescript
+await ratelimit.resetUsedTokens("user:123");
+```
+
+**Returns:** `Promise<void>`
+
+---
+
+## `TABLE_SQL`
+
+Exported constant containing the raw SQL for table creation. Use this if you disable auto-migration and manage schemas yourself.
+
+```typescript
+import { TABLE_SQL } from "pg-ratelimit";
+
+// Use in your migration tool of choice
+await pool.query(TABLE_SQL);
+```
+
+---
+
+## Algorithm helpers
+
+### `Ratelimit.fixedWindow(tokens, window)`
+
+```typescript
+Ratelimit.fixedWindow(10, "1m"); // 10 requests per minute
+Ratelimit.fixedWindow(100, "1h"); // 100 requests per hour
+```
+
+| Parameter | Type                 | Description             |
+| --------- | -------------------- | ----------------------- |
+| `tokens`  | `number`             | Max requests per window |
+| `window`  | `Duration \| number` | Window duration         |
+
+### `Ratelimit.slidingWindow(tokens, window)`
+
+```typescript
+Ratelimit.slidingWindow(50, "30s"); // 50 requests per 30 seconds
+```
+
+| Parameter | Type                 | Description             |
+| --------- | -------------------- | ----------------------- |
+| `tokens`  | `number`             | Max requests per window |
+| `window`  | `Duration \| number` | Window duration         |
+
+### `Ratelimit.tokenBucket(refillRate, interval, maxTokens)`
+
+```typescript
+Ratelimit.tokenBucket(5, "10s", 20); // Refill 5 every 10s, max 20
+```
+
+| Parameter    | Type                 | Description               |
+| ------------ | -------------------- | ------------------------- |
+| `refillRate` | `number`             | Tokens added per interval |
+| `interval`   | `Duration \| number` | Refill interval           |
+| `maxTokens`  | `number`             | Maximum bucket capacity   |
+
+---
+
+## Types
+
+### `LimitResult`
+
+```typescript
+interface LimitResult {
+  success: boolean; // Whether the request is allowed
+  limit: number; // Max tokens allowed
+  remaining: number; // Tokens remaining after this request
+  reset: number; // Unix timestamp (ms) when the current window/bucket resets
+}
+```
+
+### `RatelimitConfig`
+
+```typescript
+type RatelimitConfig = {
+  pool: Pool; // pg connection pool
+  limiter: Algorithm; // Algorithm from a static helper method
+  prefix: string; // Required - namespaces keys to prevent collisions
+  debug?: boolean; // Default: false - logs queries to console.debug
+  clock?: Clock; // Default: () => new Date()
+  cleanupProbability?: number; // Default: 0.1 - probability (0–1) of cleanup per limit() call
+} & ({ durable?: false } | { durable: true; synchronousCommit?: boolean });
+```
+
+See [Database Design - synchronousCommit](/database/#synchronouscommit) for details on how this option affects write performance and durability.
+
+### `Duration`
+
+```typescript
+type TimeUnit = "s" | "m" | "h" | "d";
+type Duration = `${number} ${TimeUnit}` | `${number}${TimeUnit}`;
+// '30s', '30 s', '1h', '5m', '1d'
+// Also accepts raw milliseconds as number where Duration | number is used
+```
+
+### `Algorithm`
+
+```typescript
+type Algorithm =
+  | { type: "fixedWindow"; tokens: number; window: Duration | number }
+  | { type: "slidingWindow"; tokens: number; window: Duration | number }
+  | { type: "tokenBucket"; refillRate: number; interval: Duration | number; maxTokens: number };
+```
+
+### `Ratelimit`
+
+```typescript
+class Ratelimit {
+  constructor(config: RatelimitConfig);
+  limit(key: string, opts?: { rate?: number }): Promise<LimitResult>;
+  blockUntilReady(
+    key: string,
+    timeout: Duration | number,
+    opts?: { rate?: number },
+  ): Promise<LimitResult>;
+  getRemaining(key: string): Promise<{ remaining: number; reset: number }>;
+  resetUsedTokens(key: string): Promise<void>;
+
+  static fixedWindow(tokens: number, window: Duration | number): Algorithm;
+  static slidingWindow(tokens: number, window: Duration | number): Algorithm;
+  static tokenBucket(refillRate: number, interval: Duration | number, maxTokens: number): Algorithm;
+}
+```
+
+### `Clock`
+
+```typescript
+type Clock = () => Date;
+```
+
+Used for injectable time in tests. See the [Testing Guide](/testing/).
+
+---
+
+## Environment variables
+
+| Variable                            | Default | Description                                    |
+| ----------------------------------- | ------- | ---------------------------------------------- |
+| `PG_RATELIMIT_DISABLE_AUTO_MIGRATE` | `false` | Set to `true` to skip automatic table creation |
+
+Code-level options always take precedence over environment variables.

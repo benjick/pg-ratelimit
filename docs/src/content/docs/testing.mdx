@@ -1,0 +1,190 @@
+---
+title: Testing Guide
+description: How to test rate limiting with injectable clocks and real Postgres.
+---
+
+import { Steps } from "@astrojs/starlight/components";
+
+## Injectable clock
+
+All pg-ratelimit SQL uses a parameterized `now` value instead of Postgres's `now()`. This means you can control time in tests without sleeps.
+
+```typescript
+import { Ratelimit } from "pg-ratelimit";
+
+let currentTime = new Date("2025-01-01T00:00:00Z");
+const clock = () => currentTime;
+
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.fixedWindow(5, "1m"),
+  prefix: "test",
+  clock,
+});
+```
+
+Every call to `limit()`, `getRemaining()`, etc. uses `clock()` to get the current time, which flows into all SQL queries as a parameter.
+
+## testcontainers setup
+
+pg-ratelimit tests against real Postgres using [testcontainers](https://testcontainers.com/) - a library that spins up Docker containers for testing.
+
+<Steps>
+
+1. **Install test dependencies**
+
+   ```bash
+   pnpm add -D vitest @testcontainers/postgresql
+   ```
+
+2. **Create a test setup file**
+
+   ```typescript
+   // tests/setup.ts
+   import { PostgreSqlContainer } from "@testcontainers/postgresql";
+   import { Pool } from "pg";
+
+   let container: any;
+   let pool: Pool;
+
+   export async function setup() {
+     container = await new PostgreSqlContainer().start();
+     pool = new Pool({ connectionString: container.getConnectionUri() });
+     return pool;
+   }
+
+   export async function teardown() {
+     await pool.end();
+     await container.stop();
+   }
+
+   export function getPool() {
+     return pool;
+   }
+   ```
+
+3. **Write tests with truncation between cases**
+
+   ```typescript
+   import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
+   import { Ratelimit } from "pg-ratelimit";
+   import { setup, teardown, getPool } from "./setup";
+
+   let pool: Pool;
+
+   beforeAll(async () => {
+     pool = await setup();
+   });
+
+   afterEach(async () => {
+     await pool.query("TRUNCATE rate_limit_ephemeral, rate_limit_durable");
+   });
+
+   afterAll(async () => {
+     await teardown();
+   });
+
+   it("allows requests within the limit", async () => {
+     const ratelimit = new Ratelimit({
+       pool,
+       limiter: Ratelimit.fixedWindow(5, "1m"),
+       prefix: "test",
+     });
+
+     for (let i = 0; i < 5; i++) {
+       const result = await ratelimit.limit("user:1");
+       expect(result.success).toBe(true);
+     }
+   });
+   ```
+
+</Steps>
+
+## Time manipulation patterns
+
+### Fast-forwarding past a window
+
+```typescript
+let currentTime = new Date("2025-01-01T00:00:00Z");
+const clock = () => currentTime;
+
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.fixedWindow(5, "1m"),
+  prefix: "test",
+  clock,
+});
+
+// Exhaust the limit
+for (let i = 0; i < 5; i++) {
+  await ratelimit.limit("user:1");
+}
+expect((await ratelimit.limit("user:1")).success).toBe(false);
+
+// Fast forward past the window
+currentTime = new Date("2025-01-01T00:01:01Z");
+expect((await ratelimit.limit("user:1")).success).toBe(true);
+```
+
+### Testing sliding window weights
+
+```typescript
+let currentTime = new Date("2025-01-01T00:00:00Z");
+const clock = () => currentTime;
+
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.slidingWindow(10, "1m"),
+  prefix: "test",
+  clock,
+});
+
+// Use 8 tokens in the first window
+for (let i = 0; i < 8; i++) {
+  await ratelimit.limit("user:1");
+}
+
+// Move to 30% into the next window
+currentTime = new Date("2025-01-01T00:01:18Z");
+
+// Effective count: 8 × 0.7 + 0 = 5.6
+// So ~4 more requests should be allowed
+```
+
+### Testing token refill
+
+```typescript
+let currentTime = new Date("2025-01-01T00:00:00Z");
+const clock = () => currentTime;
+
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.tokenBucket(5, "10s", 20),
+  prefix: "test",
+  clock,
+});
+
+// Use 15 tokens
+for (let i = 0; i < 15; i++) {
+  await ratelimit.limit("user:1");
+}
+
+// Advance 10 seconds - should refill 5 tokens
+currentTime = new Date("2025-01-01T00:00:10Z");
+const result = await ratelimit.limit("user:1"); // triggers refill calculation
+expect(result.remaining).toBe(9); // 5 left + 5 refilled - 1 consumed
+```
+
+## Key test cases
+
+These are the most important scenarios to cover:
+
+- **Window enforcement**: N requests allowed, N+1 rejected, window resets after duration
+- **Sliding window boundary**: Weighted previous window count produces correct effective count
+- **Token bucket refill**: Tokens refill at the correct rate, capped at max
+- **Concurrency**: Fire 100 simultaneous `limit()` calls - verify exactly the right number succeed
+- **Durability**: Durable table is logged (`pg_class.relpersistence = 'p'`), ephemeral is unlogged (`'u'`)
+- **Negative rate**: Tokens refund correctly and can exceed max limit
+- **Cleanup**: Expired rows deleted on `limit()` call, only own prefix affected
+- **`blockUntilReady`**: Respects timeout, returns early when time until `reset` exceeds remaining timeout
+- **Clock injection**: Time manipulation works without real sleeps
