@@ -2,27 +2,24 @@
   "name": "pg-ratelimit",
   "version": "0.1.0",
   "description": "PostgreSQL-backed rate limiting for Node.js",
+  "keywords": [
+    "postgres",
+    "postgresql",
+    "rate-limit",
+    "rate-limiting",
+    "ratelimit",
+    "throttle"
+  ],
+  "homepage": "https://benjick.js.org/pg-ratelimit",
+  "bugs": {
+    "url": "https://github.com/benjick/pg-ratelimit/issues"
+  },
   "license": "MIT",
   "author": "Max Malm",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/benjick/pg-ratelimit.git",
     "directory": "packages/pg-ratelimit"
-  },
-  "homepage": "https://benjick.js.org/pg-ratelimit",
-  "bugs": {
-    "url": "https://github.com/benjick/pg-ratelimit/issues"
-  },
-  "keywords": [
-    "rate-limit",
-    "ratelimit",
-    "postgres",
-    "postgresql",
-    "rate-limiting",
-    "throttle"
-  ],
-  "engines": {
-    "node": ">=18.0.0"
   },
   "files": [
     "dist"
@@ -57,5 +54,8 @@
   },
   "peerDependencies": {
     "pg": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

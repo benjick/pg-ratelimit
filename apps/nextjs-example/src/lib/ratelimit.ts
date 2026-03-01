@@ -4,9 +4,7 @@ import type { Strategy } from "./strategies";
 
 const globalForPg = globalThis as unknown as { pgPool?: Pool };
 
-const pool =
-  globalForPg.pgPool ??
-  new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = globalForPg.pgPool ?? new Pool({ connectionString: process.env.DATABASE_URL });
 
 globalForPg.pgPool = pool;
 
