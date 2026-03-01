@@ -26,16 +26,18 @@ const ratelimit = new Ratelimit({
 
 **Config:**
 
-| Property             | Type        | Description                                                                                                                                      |
-| -------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pool`               | `pg.Pool`   | A `pg` connection pool                                                                                                                           |
-| `limiter`            | `Algorithm` | Algorithm config from a static helper method                                                                                                     |
-| `prefix`             | `string`    | Required - namespaces keys to prevent collisions                                                                                                 |
-| `durable`            | `boolean`   | Optional. Default: `false` - `true` uses logged table                                                                                            |
-| `synchronousCommit`  | `boolean`   | Only when `durable: true`. Default: `false` - see [RatelimitConfig](#ratelimitconfig)                                                            |
-| `debug`              | `boolean`   | Optional. Default: `false` - logs queries to `console.debug`                                                                                     |
-| `clock`              | `Clock`     | Optional. Custom clock for testing. Defaults to `() => new Date()`                                                                               |
-| `cleanupProbability` | `number`    | Optional. Default: `0.1` - probability (0–1) that a `limit()` call runs expired-row cleanup. See [Cleanup strategy](/database/#cleanup-strategy) |
+| Property             | Type        | Description                                                                                                                                        |
+| -------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pool`               | `pg.Pool`   | A `pg` connection pool                                                                                                                             |
+| `limiter`            | `Algorithm` | Algorithm config from a static helper method                                                                                                       |
+| `prefix`             | `string`    | Required - namespaces keys to prevent collisions                                                                                                   |
+| `durable`            | `boolean`   | Optional. Default: `false` - `true` uses logged table                                                                                              |
+| `synchronousCommit`  | `boolean`   | Only when `durable: true`. Default: `false` - see [RatelimitConfig](#ratelimitconfig)                                                              |
+| `debug`              | `boolean`   | Optional. Default: `false` - logs queries to `console.debug`                                                                                       |
+| `clock`              | `Clock`     | Optional. Custom clock for testing. Defaults to `() => new Date()`                                                                                 |
+| `cleanupProbability` | `number`    | Optional. Default: `0.1` - probability (0–1) that a `limit()` call runs expired-row cleanup. See [Cleanup strategy](../database/#cleanup-strategy) |
+| `inMemoryBlock`      | `boolean`   | Optional. Default: `false` - cache blocked keys in-process to skip DB round trips. See [In-memory blocking](#in-memory-blocking)                   |
+| `maxBlockedKeys`     | `number`    | Only when `inMemoryBlock: true`. Default: `10000` - OOM safety cap for cached entries                                                              |
 
 Auto-creates tables on first use via `CREATE TABLE IF NOT EXISTS`. Disable with `PG_RATELIMIT_DISABLE_AUTO_MIGRATE=true`.
 
@@ -239,18 +241,7 @@ interface LimitResult {
 
 ### `RatelimitConfig`
 
-```typescript
-type RatelimitConfig = {
-  pool: Pool; // pg connection pool
-  limiter: Algorithm; // Algorithm from a static helper method
-  prefix: string; // Required - namespaces keys to prevent collisions
-  debug?: boolean; // Default: false - logs queries to console.debug
-  clock?: Clock; // Default: () => new Date()
-  cleanupProbability?: number; // Default: 0.1 - probability (0–1) of cleanup per limit() call
-} & ({ durable?: false } | { durable: true; synchronousCommit?: boolean });
-```
-
-See [Database Design - synchronousCommit](/database/#synchronouscommit) for details on how this option affects write performance and durability.
+See [`new Ratelimit(config)`](#new-ratelimitconfig) above for all fields and defaults, and [Database Design - synchronousCommit](../database/#synchronouscommit) for details on how that option affects write performance and durability.
 
 ### `Duration`
 
@@ -296,7 +287,40 @@ class Ratelimit {
 type Clock = () => Date;
 ```
 
-Used for injectable time in tests. See the [Testing Guide](/testing/).
+Used for injectable time in tests. See the [Testing Guide](../testing/).
+
+---
+
+## In-memory blocking
+
+Under load, the vast majority of rate-limited requests are 429s that still make a full PostgreSQL round trip. `inMemoryBlock` caches blocked keys in a `Map` so that repeated requests from already-blocked keys return instantly without touching the database.
+
+```typescript
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.slidingWindow(100, "1m"),
+  prefix: "api",
+  inMemoryBlock: true,
+});
+```
+
+### How it works
+
+1. When `limit()` returns `success: false`, the key and its `reset` timestamp are cached in memory.
+2. Subsequent `limit()` calls for the same key return a synthetic `{ success: false, remaining: 0 }` result immediately - no DB query.
+3. Once the cached `reset` time passes, the entry is evicted and the next call falls through to the database normally.
+
+Negative-rate calls (refunds) always bypass the cache and hit the database, since they may unblock a key. `resetUsedTokens()` also clears the cached entry for the key.
+
+### Tradeoffs
+
+:::note
+This is a **per-process** cache. In a multi-process deployment (e.g., multiple containers behind a load balancer), each process maintains its own cache. A key blocked in one process may still hit the database from another process. This is fine - the optimization is probabilistic, not a correctness requirement. The cached response is identical to what the database would return - blocked requests always have `remaining: 0` regardless of caching.
+:::
+
+:::tip
+`maxBlockedKeys` (default: `10,000`) caps the cache size to prevent unbounded memory growth. When the cap is exceeded, expired entries are swept. If the cache is still over the limit after sweeping, new entries are simply not cached - no valid entries are evicted.
+:::
 
 ---
 

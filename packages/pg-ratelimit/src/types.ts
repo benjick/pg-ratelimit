@@ -33,6 +33,12 @@ export interface LimitResult {
 
 export type Clock = () => Date;
 
+export type InMemoryBlockConfig =
+  | { inMemoryBlock?: false }
+  | { inMemoryBlock: true; maxBlockedKeys?: number };
+
+export type DurableConfig = { durable?: false } | { durable: true; synchronousCommit?: boolean };
+
 export type RatelimitConfig = {
   pool: Pool;
   limiter: Algorithm;
@@ -40,4 +46,5 @@ export type RatelimitConfig = {
   debug?: boolean;
   clock?: Clock;
   cleanupProbability?: number;
-} & ({ durable?: false } | { durable: true; synchronousCommit?: boolean });
+} & InMemoryBlockConfig &
+  DurableConfig;

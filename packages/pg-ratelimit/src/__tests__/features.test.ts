@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, afterAll, vi } from "vitest";
 import type { Pool } from "pg";
 import { Ratelimit } from "../index.js";
 import { setup, teardown } from "./setup.js";
@@ -340,5 +340,165 @@ describe("resetUsedTokens", () => {
     const result = await ratelimit.limit("user:1");
     expect(result.success).toBe(true);
     expect(result.remaining).toBe(4);
+  });
+});
+
+describe("in-memory block", () => {
+  it("expires cache and falls through to DB", async () => {
+    let currentTime = new Date("2025-01-01T00:00:00Z");
+    const clock = () => currentTime;
+
+    const ratelimit = new Ratelimit({
+      pool,
+      limiter: Ratelimit.fixedWindow(1, "1m"),
+      prefix: "imb-expiry",
+      clock,
+      inMemoryBlock: true,
+      cleanupProbability: 0,
+    });
+
+    await ratelimit.limit("user:1");
+    const blocked = await ratelimit.limit("user:1");
+    expect(blocked.success).toBe(false);
+
+    // Advance past the reset
+    currentTime = new Date("2025-01-01T00:02:00Z");
+
+    // Should expire cache entry and hit DB for a new window
+    const result = await ratelimit.limit("user:1");
+    expect(result.success).toBe(true);
+  });
+
+  it("bypasses cache for negative rate and clears block", async () => {
+    let currentTime = new Date("2025-01-01T00:00:00Z");
+    const clock = () => currentTime;
+
+    const ratelimit = new Ratelimit({
+      pool,
+      limiter: Ratelimit.fixedWindow(1, "1m"),
+      prefix: "imb-neg",
+      clock,
+      inMemoryBlock: true,
+      cleanupProbability: 0,
+    });
+
+    // Exhaust and cache the block
+    await ratelimit.limit("user:1");
+    await ratelimit.limit("user:1");
+
+    // Negative rate should bypass cache and hit DB
+    // Refund 2 tokens (count goes from 2 to 0)
+    const refund = await ratelimit.limit("user:1", { rate: -2 });
+    expect(refund.success).toBe(true);
+
+    // After refund, the key should no longer be cached as blocked
+    // Next positive-rate call should hit DB (count goes from 0 to 1, within limit)
+    const afterRefund = await ratelimit.limit("user:1");
+    expect(afterRefund.success).toBe(true);
+  });
+
+  it("resetUsedTokens clears cached block", async () => {
+    let currentTime = new Date("2025-01-01T00:00:00Z");
+    const clock = () => currentTime;
+
+    const ratelimit = new Ratelimit({
+      pool,
+      limiter: Ratelimit.fixedWindow(1, "1m"),
+      prefix: "imb-reset",
+      clock,
+      inMemoryBlock: true,
+      cleanupProbability: 0,
+    });
+
+    // Exhaust and cache block
+    await ratelimit.limit("user:1");
+    await ratelimit.limit("user:1");
+
+    // Verify cached
+    const querySpy = vi.spyOn(pool, "query");
+    const cached = await ratelimit.limit("user:1");
+    expect(cached.success).toBe(false);
+    expect(querySpy).not.toHaveBeenCalled();
+    querySpy.mockRestore();
+
+    // Reset clears the cache
+    await ratelimit.resetUsedTokens("user:1");
+
+    // Next call should hit DB and succeed
+    const result = await ratelimit.limit("user:1");
+    expect(result.success).toBe(true);
+  });
+
+  it("sweeps expired entries when maxBlockedKeys is exceeded", async () => {
+    let currentTime = new Date("2025-01-01T00:00:00Z");
+    const clock = () => currentTime;
+
+    const ratelimit = new Ratelimit({
+      pool,
+      limiter: Ratelimit.fixedWindow(1, "1m"),
+      prefix: "imb-sweep",
+      clock,
+      inMemoryBlock: true,
+      maxBlockedKeys: 3,
+      cleanupProbability: 0,
+    });
+
+    // Exhaust and cache blocks for 3 keys
+    for (let i = 1; i <= 3; i++) {
+      await ratelimit.limit(`user:${i}`);
+      await ratelimit.limit(`user:${i}`);
+    }
+
+    // Advance past all resets so entries are expired
+    currentTime = new Date("2025-01-01T00:02:00Z");
+
+    // This call exhausts user:4 then the denial caches it.
+    // Caching triggers sweep because size (3+1) > maxBlockedKeys (3).
+    // Sweep removes the 3 expired entries, leaving only user:4.
+    await ratelimit.limit("user:4");
+    const blocked = await ratelimit.limit("user:4");
+    expect(blocked.success).toBe(false);
+
+    // Expired entries should have been swept — verify user:1 hits DB
+    const querySpy = vi.spyOn(pool, "query");
+    const result = await ratelimit.limit("user:1");
+    // user:1 should hit DB (not served from cache) and succeed in a new window
+    expect(result.success).toBe(true);
+    expect(querySpy).toHaveBeenCalled();
+    querySpy.mockRestore();
+  });
+
+  it.each([
+    { name: "fixedWindow", limiter: Ratelimit.fixedWindow(1, "1m") },
+    { name: "slidingWindow", limiter: Ratelimit.slidingWindow(1, "1m") },
+    { name: "tokenBucket", limiter: Ratelimit.tokenBucket(1, "1m", 1) },
+  ])("works with $name", async ({ name, limiter }) => {
+    let currentTime = new Date("2025-01-01T00:00:00Z");
+    const clock = () => currentTime;
+
+    const ratelimit = new Ratelimit({
+      pool,
+      limiter,
+      prefix: `imb-algo-${name}`,
+      clock,
+      inMemoryBlock: true,
+      cleanupProbability: 0,
+    });
+
+    const first = await ratelimit.limit("user:1");
+    expect(first.success).toBe(true);
+
+    // Should be blocked
+    const second = await ratelimit.limit("user:1");
+    expect(second.success).toBe(false);
+
+    // Should be served from cache with matching reset
+    const querySpy = vi.spyOn(pool, "query");
+    const third = await ratelimit.limit("user:1");
+    expect(third.success).toBe(false);
+    expect(third.remaining).toBe(0);
+    expect(third.reset).toBe(second.reset);
+    expect(querySpy).not.toHaveBeenCalled();
+    querySpy.mockRestore();
   });
 });

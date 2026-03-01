@@ -19,7 +19,7 @@ Window 1 (00:00–01:00)     Window 2 (01:00–02:00)
 
 A user can send the maximum number of requests at the end of one window and the beginning of the next, effectively doubling the rate for a short period. If your limit is 10/minute and a user sends 10 requests at 0:59 and 10 at 1:00, they've made 20 requests in 2 seconds.
 
-If this matters for your use case, use [Sliding Window](/algorithms/sliding-window/) instead.
+If this matters for your use case, use [Sliding Window](../sliding-window/) instead.
 
 ## SQL strategy
 
@@ -47,7 +47,7 @@ RETURNING count, expires_at
 If the existing row has expired (`expires_at < $now`), the window is reset - `count`, `window_start`, and `expires_at` are all replaced with fresh values. Otherwise, `count` is incremented within the current window. If the returned count exceeds the token limit, the request is denied. The returned `expires_at` is used as the `reset` time.
 
 :::note[Consumes on denial]
-Fixed window increments the counter even when the request is denied. This is a side effect of the single atomic statement - there's no conditional branch within the SQL. In practice this doesn't affect correctness: `remaining` is clamped to 0 and the counter resets with the window. If your use case is sensitive to this (e.g. paired with negative-rate refunds), use [sliding window](/algorithms/sliding-window/) instead, which only writes on success.
+Fixed window increments the counter even when the request is denied. This is a side effect of the single atomic statement - there's no conditional branch within the SQL. In practice this doesn't affect correctness: `remaining` is clamped to 0 and the counter resets with the window. If your use case is sensitive to this (e.g. paired with negative-rate refunds), use [sliding window](../sliding-window/) instead, which only writes on success.
 :::
 
 ## Usage

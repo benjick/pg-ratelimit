@@ -23,6 +23,10 @@ export class Ratelimit {
   private readonly durable: boolean;
   private readonly synchronousCommit: boolean;
   private readonly cleanupProbability: number;
+  private readonly inMemoryBlock: boolean;
+  private readonly maxBlockedKeys: number;
+  private readonly limitValue: number;
+  private readonly blockedKeys: Map<string, number>;
 
   // Pre-parsed durations (only the relevant one is used per algorithm)
   private readonly windowMs: number;
@@ -60,6 +64,13 @@ export class Ratelimit {
       this.windowMs = 0;
       this.intervalMs = toMs(this.algorithm.interval);
     }
+
+    this.inMemoryBlock = "inMemoryBlock" in config && config.inMemoryBlock === true;
+    this.maxBlockedKeys =
+      this.inMemoryBlock && "maxBlockedKeys" in config ? (config.maxBlockedKeys ?? 10_000) : 10_000;
+    this.blockedKeys = new Map();
+    this.limitValue =
+      this.algorithm.type === "tokenBucket" ? this.algorithm.maxTokens : this.algorithm.tokens;
   }
 
   static fixedWindow(tokens: number, window: Duration | number): Algorithm {
@@ -81,6 +92,18 @@ export class Ratelimit {
   async limit(key: string, opts?: { rate?: number }): Promise<LimitResult> {
     const rate = opts?.rate ?? 1;
     const now = this.clock();
+    const nowMs = now.getTime();
+
+    // In-memory block: serve synthetic 429 for known-blocked keys (positive rate only)
+    if (this.inMemoryBlock && rate > 0) {
+      const cachedReset = this.blockedKeys.get(key);
+      if (cachedReset !== undefined) {
+        if (cachedReset > nowMs) {
+          return { success: false, limit: this.limitValue, remaining: 0, reset: cachedReset };
+        }
+        this.blockedKeys.delete(key);
+      }
+    }
 
     await ensureTables(this.pool);
 
@@ -112,6 +135,19 @@ export class Ratelimit {
           this.intervalMs,
         );
         break;
+    }
+
+    // In-memory block: cache blocked keys after DB result
+    if (this.inMemoryBlock) {
+      if (rate < 0) {
+        // Negative rate (refund) may have unblocked the key
+        this.blockedKeys.delete(key);
+      } else if (!result.success) {
+        this.blockedKeys.set(key, result.reset);
+        if (this.blockedKeys.size > this.maxBlockedKeys) {
+          this.sweepExpired(nowMs);
+        }
+      }
     }
 
     // Fire-and-forget cleanup of expired rows for this prefix
@@ -280,5 +316,15 @@ export class Ratelimit {
     }
 
     await this.pool.query(sql, [this.prefix, key]);
+
+    this.blockedKeys.delete(key);
+  }
+
+  private sweepExpired(nowMs: number): void {
+    for (const [k, reset] of this.blockedKeys) {
+      if (reset <= nowMs) {
+        this.blockedKeys.delete(k);
+      }
+    }
   }
 }

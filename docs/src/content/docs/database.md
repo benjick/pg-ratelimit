@@ -183,3 +183,24 @@ DELETE FROM rate_limit_durable WHERE expires_at < now();
 ```
 
 :::
+
+## Reducing database load with in-memory blocking
+
+Under sustained traffic, most rate-limited requests are repeated 429s for keys that are already blocked. Each of these still executes a full SQL round trip even though the answer is already known. The `inMemoryBlock` option caches blocked keys in the Node.js process so these requests never reach PostgreSQL:
+
+```typescript
+const ratelimit = new Ratelimit({
+  pool,
+  limiter: Ratelimit.fixedWindow(100, "1m"),
+  prefix: "api",
+  inMemoryBlock: true,
+});
+```
+
+With this enabled, blocked keys are served from an in-process `Map` until their reset time passes. This dramatically reduces query volume and latency under load - in benchmarks, average latency drops significantly because the majority of requests skip the database entirely.
+
+:::caution
+In multi-process deployments, a refund (`rate: -1`) or `resetUsedTokens()` on one server won't clear the cached block on other servers. Those servers will keep serving stale 429s until the cached reset time expires. If you use refunds and run multiple processes, consider whether this staleness is acceptable for your use case.
+:::
+
+See the [API reference](../api-reference/#in-memory-blocking) for configuration details.

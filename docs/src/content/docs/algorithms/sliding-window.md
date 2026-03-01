@@ -5,7 +5,7 @@ description: Weighted window rate limiting that fixes the boundary problem.
 
 ## How it works
 
-Sliding window eliminates the [boundary problem](/algorithms/fixed-window/#the-boundary-problem) of fixed windows by weighting the previous window's count against the current one based on how far into the current window you are.
+Sliding window eliminates the [boundary problem](../fixed-window/#the-boundary-problem) of fixed windows by weighting the previous window's count against the current one based on how far into the current window you are.
 
 The formula:
 
