@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- In-memory block strategy - cache blocked keys in-process to skip DB round trips for repeated 429s. Enable with `inMemoryBlock: true`. Reduces average latency by ~50% and doubles throughput under load.
+- In-memory block strategy - cache blocked keys in-process to skip DB round trips for repeated 429s. Enable with `inMemoryBlock: true`. Significant latency and throughput improvements under load.
 - `maxBlockedKeys` option (default: 10,000) caps cache size with automatic expired-entry sweeping.
 - `InMemoryBlockConfig` and `DurableConfig` discriminated union types. `maxBlockedKeys` is now a type error unless `inMemoryBlock: true` is set.
 - Benchmark package comparing throughput and latency with and without `inMemoryBlock`.
