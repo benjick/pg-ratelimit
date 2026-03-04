@@ -1,0 +1,21 @@
+{
+  "name": "hono-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n db,server -c blue,green \"docker compose up\" \"tsx watch src/index.ts\""
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.0.0",
+    "hono": "^4.0.0",
+    "pg": "^8.0.0",
+    "pg-ratelimit": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/pg": "^8",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5"
+  }
+}

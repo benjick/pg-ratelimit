@@ -312,10 +312,10 @@ describe("getRemaining", () => {
     expect(afterCheck.remaining).toBe(7);
 
     // Advance to 50% into next window - prev_count=3, weight=0.5
-    // effective = 3 * 0.5 + 0 = 1.5, remaining = 10 - 1.5 = 8.5
+    // effective = 3 * 0.5 + 0 = 1.5, remaining = floor(10 - 1.5) = 8
     currentTime = new Date("2025-01-01T00:01:30Z");
     const weighted = await ratelimit.getRemaining("user:1");
-    expect(weighted.remaining).toBe(8.5);
+    expect(weighted.remaining).toBe(8);
   });
 });
 

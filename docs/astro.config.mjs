@@ -27,6 +27,10 @@ export default defineConfig({
         },
         { label: "Database Design", slug: "database" },
         { label: "API Reference", slug: "api-reference" },
+        {
+          label: "Frameworks",
+          items: [{ label: "Hono", slug: "frameworks/hono" }],
+        },
         { label: "Testing Guide", slug: "testing" },
       ],
     }),

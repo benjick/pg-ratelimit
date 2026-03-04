@@ -38,6 +38,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./hono": {
+      "import": {
+        "types": "./dist/hono.d.ts",
+        "default": "./dist/hono.js"
+      },
+      "require": {
+        "types": "./dist/hono.d.cts",
+        "default": "./dist/hono.cjs"
+      }
     }
   },
   "scripts": {
@@ -47,13 +57,20 @@
   "devDependencies": {
     "@testcontainers/postgresql": "^10.0.0",
     "@types/pg": "^8.0.0",
+    "hono": "^4.0.0",
     "pg": "^8.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
   },
   "peerDependencies": {
+    "hono": "^4.0.0",
     "pg": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18.0.0"

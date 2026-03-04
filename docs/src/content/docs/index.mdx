@@ -21,8 +21,20 @@ hero:
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
 ```typescript
+import { Pool } from "pg";
+import { Ratelimit } from "pg-ratelimit";
+
+const pool = new Pool();
+const ratelimit = new Ratelimit({
+  pool,
+  prefix: "api",
+  limiter: Ratelimit.fixedWindow(10, "60s"),
+});
+
 const { success } = await ratelimit.limit("user:123");
-if (!success) return new Response("Too Many Requests", { status: 429 });
+if (!success) {
+  return new Response("Too Many Requests", { status: 429 });
+}
 ```
 
 <CardGrid>
@@ -44,8 +56,8 @@ if (!success) return new Response("Too Many Requests", { status: 429 });
 
 ## Why pg-ratelimit?
 
-- **You already have Postgres** - no need to add Redis or another service just for rate limiting
-- **One fewer dependency** - zero runtime deps beyond `pg`, which you're already using
-- **Durable mode** - survive crashes with logged tables for billing/quota use cases
-- **Postgres handles it fine** - for most apps, Postgres can easily handle the rate-limiting write load alongside your application queries
-- **UNLOGGED closes the perf gap** - ephemeral (UNLOGGED) tables skip WAL writes, making throughput competitive with in-memory stores
+Most rate limiting libraries require Redis or a dedicated service. If you already run PostgreSQL, you already have everything you need.
+
+- **No extra infrastructure** - zero runtime dependencies beyond `pg`. No Redis, no sidecars, no new thing to monitor.
+- **Durable mode** - logged tables survive crashes, useful for billing and quota enforcement.
+- **UNLOGGED tables** - skip WAL writes to reduce overhead. In benchmarks a single node handles ~6,700 req/s, or ~10,300 req/s with in-memory blocking enabled.

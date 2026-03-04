@@ -96,7 +96,7 @@ export async function slidingWindow(
     return {
       success,
       limit: tokens,
-      remaining: Math.max(0, tokens - effective),
+      remaining: Math.floor(Math.max(0, tokens - effective)),
       reset,
     };
   } catch (err) {

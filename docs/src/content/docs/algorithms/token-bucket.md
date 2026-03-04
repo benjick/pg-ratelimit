@@ -42,19 +42,23 @@ BEGIN;
   -- current_tokens = min(tokens + refilled, max_tokens)
   -- new_tokens = current_tokens - cost
   -- success = new_tokens >= 0
-  -- tokens_to_write = success ? new_tokens : current_tokens (no deduction on denial)
   -- ttl = (max_tokens / refill_rate) * interval
 
-  INSERT INTO rate_limit_ephemeral (prefix, key, tokens, last_refill, expires_at)
-  VALUES ($prefix, $key, $tokens_to_write, $now, $now + $ttl)
-  ON CONFLICT (prefix, key) DO UPDATE
-    SET tokens = $tokens_to_write, last_refill = $now, expires_at = $now + $ttl;
+  -- Only write on success - denied requests are a no-op on DB state.
+  -- Skipping the write avoids resetting last_refill, which would delay
+  -- token refill for subsequent requests.
+  IF success THEN
+    INSERT INTO rate_limit_ephemeral (prefix, key, tokens, last_refill, expires_at)
+    VALUES ($prefix, $key, $new_tokens, $now, $now + $ttl)
+    ON CONFLICT (prefix, key) DO UPDATE
+      SET tokens = $new_tokens, last_refill = $now, expires_at = $now + $ttl;
+  END IF;
 COMMIT;
 ```
 
 The initial `INSERT ... ON CONFLICT DO NOTHING` ensures the row exists before the `SELECT ... FOR UPDATE`. New buckets start full at `$max_tokens`. Without this, concurrent first requests would all see "no row" and bypass the row lock.
 
-Denied requests do not deduct tokens - `$tokens_to_write` is the unchanged `current_tokens` on denial. This prevents denied requests from accumulating a debt that delays future refills.
+Denied requests are a no-op on DB state - no write is issued. This avoids resetting `last_refill`, which would delay token refill for subsequent requests.
 
 On denial, `reset` is the time until enough tokens refill to satisfy the request: `ceil((cost - current_tokens) / refill_rate) * interval`. On success, `reset` is `now + ttl` (the row's expiry time).
 

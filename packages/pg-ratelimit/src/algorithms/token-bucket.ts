@@ -41,7 +41,7 @@ export async function tokenBucket(
     const existing = await client.query(selectSql, [prefix, key]);
     const row = existing.rows[0];
     const lastRefill = new Date(row.last_refill).getTime();
-    const elapsed = now.getTime() - lastRefill;
+    const elapsed = Math.max(0, now.getTime() - lastRefill);
     const refilled = Math.floor(elapsed / intervalMs) * refillRate;
     const currentTokens = Math.min(Number(row.tokens) + refilled, maxTokens);
 
@@ -82,7 +82,7 @@ export async function tokenBucket(
     return {
       success,
       limit: maxTokens,
-      remaining: Math.max(0, success ? newTokens : currentTokens),
+      remaining: Math.floor(Math.max(0, success ? newTokens : currentTokens)),
       reset,
     };
   } catch (err) {

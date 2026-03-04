@@ -143,9 +143,11 @@ export class Ratelimit {
         // Negative rate (refund) may have unblocked the key
         this.blockedKeys.delete(key);
       } else if (!result.success) {
-        this.blockedKeys.set(key, result.reset);
-        if (this.blockedKeys.size > this.maxBlockedKeys) {
+        if (this.blockedKeys.size >= this.maxBlockedKeys) {
           this.sweepExpired(nowMs);
+        }
+        if (this.blockedKeys.size < this.maxBlockedKeys) {
+          this.blockedKeys.set(key, result.reset);
         }
       }
     }
@@ -288,18 +290,18 @@ export class Ratelimit {
         const weight = 1 - elapsed / this.windowMs;
         const effective = prevCount * weight + count;
         return {
-          remaining: Math.max(0, this.algorithm.tokens - effective),
+          remaining: Math.floor(Math.max(0, this.algorithm.tokens - effective)),
           reset: windowStart + this.windowMs,
         };
       }
       case "tokenBucket": {
         const lastRefill = new Date(row.last_refill).getTime();
-        const elapsed = now.getTime() - lastRefill;
+        const elapsed = Math.max(0, now.getTime() - lastRefill);
         const refilled = Math.floor(elapsed / this.intervalMs) * this.algorithm.refillRate;
         const currentTokens = Math.min(Number(row.tokens) + refilled, this.algorithm.maxTokens);
         const ttlMs = (this.algorithm.maxTokens / this.algorithm.refillRate) * this.intervalMs;
         return {
-          remaining: Math.max(0, currentTokens),
+          remaining: Math.floor(Math.max(0, currentTokens)),
           reset: now.getTime() + ttlMs,
         };
       }

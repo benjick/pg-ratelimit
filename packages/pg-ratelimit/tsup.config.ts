@@ -1,11 +1,11 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/hono.ts"],
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
-  external: ["pg"],
+  external: ["pg", "hono"],
   esbuildOptions(options) {
     options.loader = { ...options.loader, ".sql": "text" };
   },

@@ -1,0 +1,125 @@
+---
+title: Hono Middleware
+description: Drop-in rate limiting middleware for Hono apps.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+pg-ratelimit ships a `pg-ratelimit/hono` subpath export with a ready-made Hono middleware. It accepts a `Ratelimit` instance directly - no config duplication.
+
+## Install
+
+<Tabs>
+  <TabItem label="pnpm">``` pnpm add pg-ratelimit pg hono ```</TabItem>
+  <TabItem label="npm">``` npm install pg-ratelimit pg hono ```</TabItem>
+  <TabItem label="yarn">``` yarn add pg-ratelimit pg hono ```</TabItem>
+</Tabs>
+
+## Basic usage
+
+```typescript
+import { Hono } from "hono";
+import { Pool } from "pg";
+import { Ratelimit } from "pg-ratelimit";
+import { ratelimit } from "pg-ratelimit/hono";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+const limiter = new Ratelimit({
+  pool,
+  limiter: Ratelimit.slidingWindow(10, "1m"),
+  prefix: "api",
+});
+
+const app = new Hono();
+
+app.use("/api/*", ratelimit({ limiter }));
+
+app.get("/api/hello", (c) => c.json({ message: "Hello!" }));
+```
+
+## Options
+
+```typescript
+app.use(
+  ratelimit({
+    limiter: myRatelimitInstance,
+    key: (c) => c.req.header("x-api-key") ?? "anonymous",
+    rate: 5,
+    response: (c, result) => c.json({ error: "nope" }, 429),
+  }),
+);
+```
+
+| Option     | Type                                                                 | Default                                                     | Description                               |
+| ---------- | -------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------- |
+| `limiter`  | `Ratelimit`                                                          | -                                                           | Required. Your `Ratelimit` instance       |
+| `key`      | `(c: Context) => string \| Promise<string>`                          | `x-real-ip` → `x-forwarded-for` first entry → `"anonymous"` | Extracts the identifier from each request |
+| `rate`     | `number \| (c: Context) => number \| Promise<number>`                | `1`                                                         | Tokens consumed per request               |
+| `response` | `(c: Context, result: LimitResult) => Response \| Promise<Response>` | JSON `{ error: "Too many requests" }` 429                   | Custom rejection response                 |
+
+## Headers
+
+The middleware sets standard rate limit headers on **every** response (both allowed and rejected):
+
+| Header                | Value                                                  |
+| --------------------- | ------------------------------------------------------ |
+| `RateLimit-Limit`     | Maximum tokens allowed                                 |
+| `RateLimit-Remaining` | Tokens remaining after this request                    |
+| `RateLimit-Reset`     | Unix timestamp (seconds) when the window/bucket resets |
+
+Rejected responses additionally include a `Retry-After` header with the number of seconds until the limit resets.
+
+## Custom key extraction
+
+The default key extractor uses `x-real-ip`, then the first entry of `x-forwarded-for`, then falls back to `"anonymous"`. Override it to key by API key, user ID, or anything else:
+
+```typescript
+app.use(
+  "/api/*",
+  ratelimit({
+    limiter,
+    key: (c) => c.req.header("x-api-key") ?? "anonymous",
+  }),
+);
+```
+
+## Weighted costs
+
+Use the `rate` option to consume multiple tokens for expensive endpoints:
+
+```typescript
+// Static cost
+app.use("/api/export/*", ratelimit({ limiter, rate: 10 }));
+
+// Dynamic cost
+app.use(
+  "/api/*",
+  ratelimit({
+    limiter,
+    rate: (c) => (c.req.path.startsWith("/api/export") ? 10 : 1),
+  }),
+);
+```
+
+## Error handling
+
+Errors from the limiter (e.g. database unreachable) propagate directly to Hono's error handler. The middleware does **not** fail open or fail closed - use Hono's `app.onError` to decide:
+
+```typescript
+// Fail open
+app.onError((err, c) => {
+  console.error(err);
+  return c.text("Internal Server Error", 500);
+});
+```
+
+## Example app
+
+A full working example lives at [`apps/hono-example/`](https://github.com/benjick/pg-ratelimit/tree/main/apps/hono-example) in the repo. It starts Postgres via Docker Compose and runs a Hono server with sliding window rate limiting on port 3001.
+
+```bash
+cd apps/hono-example
+pnpm dev
+curl -i http://localhost:3001/api/hello
+```
