@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-03-04
+
+### Added
+
+- **Hono middleware** - new `pg-ratelimit/hono` subpath export with drop-in rate limiting middleware. Sets `RateLimit-*` and `Retry-After` headers automatically. Hono is an optional peer dependency.
+- Framework docs section with Hono guide.
+- Example app under `apps/hono-example/`.
+
+### Fixed
+
+- **Token bucket**: skip DB write on denial to avoid resetting `last_refill`, which delayed token refill for subsequent requests.
+- **Remaining values**: floor fractional `remaining` in sliding-window and token-bucket so callers always see integers.
+- **In-memory blocking**: enforce `maxBlockedKeys` bound before inserting, preventing the block map from growing past its limit.
+
 ## [0.2.0] - 2026-03-01
 
 ### Added
